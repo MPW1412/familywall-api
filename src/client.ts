@@ -525,6 +525,53 @@ function boundedStream(
   });
 }
 
+const EXPLICIT_OFFSET = /(Z|[+-]\d{2}:?\d{2})$/i;
+
+function zoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const get = (type: string) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const wallClockAsUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second")
+  );
+  return wallClockAsUtc - instant.getTime();
+}
+
+/**
+ * Convert a date/time to the `YYYY-MM-DDTHH:mm:ss` UTC wall-clock string
+ * that `evtcreate`/`evtupdate` expect. The API interprets `startDate` and
+ * `endDate` as UTC no matter which `timeZone` is sent along, so a value
+ * without an explicit offset is interpreted in `timeZone` and shifted.
+ * Values with an explicit offset (`Z`, `+02:00`) are used as that instant.
+ */
+export function toApiDateTime(value: string, timeZone: string): string {
+  if (EXPLICIT_OFFSET.test(value)) {
+    return new Date(value).toISOString().slice(0, 19);
+  }
+  const naive = new Date(`${value}Z`);
+  if (Number.isNaN(naive.getTime())) {
+    throw new Error(`Invalid date/time: ${value}`);
+  }
+  // Two passes so the offset is evaluated at the resulting instant (DST edges).
+  const firstGuess = new Date(naive.getTime() - zoneOffsetMs(naive, timeZone));
+  const instant = new Date(naive.getTime() - zoneOffsetMs(firstGuess, timeZone));
+  return instant.toISOString().slice(0, 19);
+}
+
 export default class FamilyWallClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -715,12 +762,12 @@ export default class FamilyWallClient {
     return (await response.json()) as unknown;
   }
 
-  async updateEvent(eventId: string, event: CreateEventRequest): Promise<CalendarEvent> {
-    const body = {
-      metaId: eventId,
+  private eventBody(event: CreateEventRequest): Record<string, string | number | boolean> {
+    const { allDay = false, startDate, endDate, ...rest } = event;
+    return {
       partnerScope: "Family",
       picture: "$empty",
-      timeZone: "Europe/London",
+      timeZone: this.timezone,
       isToAll: "false",
       private: "",
       recurrencyInterval: "1",
@@ -729,28 +776,23 @@ export default class FamilyWallClient {
       byMonthDay: "",
       recurrencyEndDate: "$empty",
       reminderList: "$empty",
-      ...event
-    }
+      ...rest,
+      allDay: allDay ? "true" : "false",
+      // All-day events keep their local day boundaries (T00:00:00 / T23:59:59).
+      startDate: allDay ? startDate : toApiDateTime(startDate, this.timezone),
+      endDate: allDay ? endDate : toApiDateTime(endDate, this.timezone),
+    };
+  }
+
+  async updateEvent(eventId: string, event: CreateEventRequest): Promise<CalendarEvent> {
+    const body = { metaId: eventId, ...this.eventBody(event) };
     const response = await this.apiFetch("evtupdate", body);
     const json = await response.json() as EventCreateResponse;
     return json.a00.r.r;
   }
 
   async createEvent(event: CreateEventRequest): Promise<CalendarEvent> {
-    const body = {
-      partnerScope: "Family",
-      picture: "$empty",
-      timeZone: "Europe/London",
-      isToAll: "false",
-      private: "",
-      recurrencyInterval: "1",
-      recurrency: "NONE",
-      byDay: "",
-      byMonthDay: "",
-      recurrencyEndDate: "$empty",
-      reminderList: "$empty",
-      ...event
-    }
+    const body = this.eventBody(event);
     const response = await this.apiFetch("evtcreate", body);
     const json = await response.json() as EventCreateResponse;
     return json.a00.r.r;

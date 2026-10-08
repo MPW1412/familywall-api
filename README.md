@@ -92,7 +92,8 @@ const family = await client.getFamily();
 const events = await family.getCalendarEvents();
 console.log(events);
 
-// Create an event
+// Create an event. Times without an offset are local to the client's `timezone`
+// and converted to UTC for the API; ISO strings with `Z`/`+02:00` are used as-is.
 const newEvent = await family.createCalendarEvent({
   text: "Dentist Appointment",
   startDate: "2026-03-01T10:00:00",
@@ -100,6 +101,17 @@ const newEvent = await family.createCalendarEvent({
   color: "#FF5733",
   where: "123 Main St",
   description: "Annual checkup",
+});
+
+// Create an all-day event (pass the local day boundaries, they are not converted)
+await family.createCalendarEvent({
+  text: "School holidays",
+  startDate: "2026-10-19T00:00:00",
+  endDate: "2026-10-31T23:59:59",
+  allDay: true,
+  color: "#FF5733",
+  where: "",
+  description: "",
 });
 
 // Update an event
