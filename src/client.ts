@@ -39,8 +39,19 @@ function serialize(data: Record<string, string | number | boolean>): string {
   return params.toString();
 }
 
-function setCookie(jsessionid: string): string {
-  return `_gid=GA1.2.2118125424.1726621203; _gat_gtag_UA_30098956_2=1; _gat_gtag_UA_37056134_1=1; JSESSIONID=${jsessionid}; _ga_5GHHS7PK50=GS1.1.1726621036.1.1.1726622248.0.0.0; _ga_QEJNR13YN6=GS1.1.1726621037.1.1.1726622248.0.0.0; _ga=GA1.1.600776544.1726621203`;
+/**
+ * Extract the `name=value` pairs of all Set-Cookie headers of a response.
+ * The API sends several cookies (e.g. AWSALB, AWSALBCORS, JSESSIONID) in
+ * arbitrary order, so the session id must be looked up by name.
+ */
+function responseCookies(headers: Headers): string[] {
+  const raw =
+    typeof headers.getSetCookie === "function"
+      ? headers.getSetCookie()
+      : (headers.get("set-cookie") ?? "").split(/,(?=\s*[^\s;,=]+=)/);
+  return raw
+    .map((cookie) => cookie.split(";")[0]?.trim() ?? "")
+    .filter((cookie) => cookie.includes("="));
 }
 
 export class FamilyWallApiError extends Error {
@@ -663,12 +674,9 @@ export default class FamilyWallClient {
     };
 
     const response = await this.apiFetch("log2in", body);
-    const responseHeaders = response.headers;
-    this.jsessionid =
-      responseHeaders
-        .get("set-cookie")
-        ?.split(";")?.[0]
-        ?.replace("JSESSIONID=", "") ?? null;
+    const cookies = responseCookies(response.headers);
+    const session = cookies.find((cookie) => cookie.startsWith("JSESSIONID="));
+    this.jsessionid = session?.slice("JSESSIONID=".length) ?? null;
     if (!this.jsessionid) {
       if (attempts < 3) {
         await this.login(email, password, attempts + 1);
@@ -677,7 +685,9 @@ export default class FamilyWallClient {
       console.error("Failed to login");
       return;
     }
-    this.cookie = setCookie(this.jsessionid);
+    // Send back every cookie the server set, so the load balancer keeps
+    // routing this session to the same backend (AWSALB stickiness).
+    this.cookie = cookies.join("; ");
 
     await this._webset();
     await this._webget();
