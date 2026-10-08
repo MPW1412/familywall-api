@@ -107,11 +107,19 @@ export interface AccountStatePayload {
 
 export interface CreateEventRequest {
   text: string;
+  /**
+   * `YYYY-MM-DDTHH:mm:ss` in the client's `timezone`, or an ISO string with an
+   * explicit offset (`Z`, `+02:00`). For all-day events pass the local day
+   * boundaries (`YYYY-MM-DDT00:00:00` / `YYYY-MM-DDT23:59:59`).
+   */
   startDate: string;
+  /** See `startDate`. */
   endDate: string;
   color: string;
   where: string;
   description: string;
+  /** Create an all-day event. Defaults to `false`. */
+  allDay?: boolean;
 }
 
 export interface CalendarEvent {
